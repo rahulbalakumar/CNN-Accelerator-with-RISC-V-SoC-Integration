@@ -10,7 +10,8 @@ continuous stream of 3×3 spatial windows.
 
 - `lineBufferAXIBRAM.sv` — single-row delay line, BRAM-inferable circular buffer (single read/write pointer). Confirmed via Quartus (Cyclone IV E) to actually map to M9K blocks.
 - `slidingWindowAXIBRAM.sv` — line buffers + 3×3 register array + validity/padding logic.
-- `tb_slidingWindowAXIBRAM.sv` — self-checking testbench with an independent golden model.
+- `tb_slidingWindowAXIBRAM.sv` — self-checking testbench with an independent golden model; includes a targeted, hand-placed backpressure stall test.
+- `tb_slidingWindowAXIBRAMRandomized.sv` — same golden model, plus a constrained-random `StallGen` class driving randomized backpressure stalls (type, duration) on every transfer.
 
 (Earlier shift-register-based versions, `lineBufferAXI.sv`/`slidingWindowAXI.sv`, are superseded by the BRAM versions above and kept only for reference.)
 
@@ -124,11 +125,21 @@ sides:
   **and** correct zero-masking) against the combination of the two
   functions above.
 
-Driver holds `tvalid`/`tready` high continuously (no backpressure stress
-test yet) and streams enough sequential, distinguishable pixel values to
-exercise several full row wraps. Zero mismatches confirms both the pixel
-data and the padding/validity timing are correct — not just "looks right
-on the waveform."
+Driver holds `tvalid`/`tready` high continuously for the base test, and
+streams enough sequential, distinguishable pixel values to exercise several
+full row wraps. Zero mismatches confirms both the pixel data and the
+padding/validity timing are correct — not just "looks right on the
+waveform."
+
+**Backpressure testing:** two additional testbenches stall the handshake
+mid-stream and confirm the design correctly holds all state (no data loss,
+no corruption, no drift) — see `tb_slidingWindowAXIBRAM.sv` (one deliberate,
+hand-placed `m_axis_tready` stall right at the `window_valid` threshold) and
+`tb_slidingWindowAXIBRAMRandomized.sv` (a `StallGen` class randomizing
+which signal(s) stall — `s_axis_tvalid` only, `m_axis_tready` only, or both
+— and for how long, on every transfer). Both pass clean on the current
+design; two real bugs were found and fixed getting here (see Known Issues
+Fixed) — one in the RTL, one in the randomized testbench itself.
 
 ## Status
 
@@ -136,7 +147,7 @@ on the waveform."
 - [x] `window_valid` (row/column boundary correctness)
 - [x] Padding — all four edges (left/top/right/bottom), internally masked, fully verified for one full frame
 - [x] BRAM-inferable circular line buffer — implemented, delay-compensated, and **confirmed via Quartus synthesis** (Cyclone IV E / DE2-115) to actually map to M9K blocks, not registers
-- [ ] Backpressure/handshake testing (`m_axis_tready` dropping mid-stream) — not yet tested; all testing so far uses continuous flow, no stalls
+- [x] Backpressure/handshake testing — both targeted (single hand-placed stall) and randomized (constrained-random `class`, all 3 stall scenarios × varied durations) testing done and passing; two real bugs found and fixed (see Known Issues Fixed)
 - [ ] Re-verify AXI-Stream master handoff to Member 1
 - [ ] Full Quartus compile (Fitter/Assembler) + timing closure — needs Member 3's SDC constraints first; Analysis & Synthesis alone (sufficient for confirming BRAM inference) has been done
 
@@ -154,3 +165,5 @@ on the waveform."
 - `m_axis_tvalid` was briefly double-registered (one cycle behind `m_axis_tdata`), silently dropping the first valid window — fixed by driving it combinationally instead.
 - **BRAM's registered read silently broke column alignment.** Switching the line buffer to a real M9K-inferring design (registered read, per Intel's required template) added +1 cycle of latency per buffer that the shift-register version never had. Since `reg_row_1`/`2`/`3` pass through 0/1/2 buffers respectively, this desynchronized their column alignment — fixed with explicit compensating registers on `reg_row_1`'s and `reg_row_2`'s sources (2 and 1 extra register stages respectively) so all three rows stay aligned, plus updating `window_valid`'s threshold and `center_index` from `ROW_LENGTH+2` to `ROW_LENGTH+4` to match.
 - **Resetting the BRAM array's contents silently prevents BRAM inference.** Intel/Quartus documentation confirms real Block RAM hardware cannot clear its contents via a reset signal — any HDL that resets a memory array's contents (as opposed to just an output register) gets synthesized as ordinary logic cells instead, with no error, just a "Total memory bits: 0" in the synthesis report. Fixed by removing the reset on `mem[]` in `lineBufferAXIBRAM` (keeping the reset on the separate `data_out` register, which is fine — it's not memory content). Confirmed safe: `window_valid` already guarantees nothing downstream trusts a buffer's output before every address has been written with real data at least once.
+- **Line buffer's read was unconditional, and only backpressure testing exposed it.** `data_out <= mem[ptr]` ran on every clock edge regardless of `wr_en`. During continuous flow this was invisible (the pointer was also frozen exactly when the write was, so re-reading the same address gave the same value) — but during a stall, extensive testing beforehand (padding, all four edges, the full BRAM rework) never exercised this path, since nothing had stalled before. Once a real `m_axis_tready` stall was injected, `line_out_1` kept silently advancing (`mem[ptr]` continuing to update from stale/unwritten data) even while `wr_en=0`, desynchronizing `reg_row_2` and corrupting the output for several transfers after every stall. Fixed by gating the read inside the same `if(wr_en)` as the write, so the buffer's output — like every other signal in this module — genuinely holds its value when not enabled. Worth remembering generally: a signal that "looks safe" only because a specific input condition happens to coincide with another isn't actually proven safe until that assumption itself gets tested.
+- **Randomized backpressure testbench drove a DUT output port.** The "stall both" case in `StallGen`-based testing set `m_axis_tvalid = 0`/`= 1` directly, alongside the correct `s_axis_tvalid`. But `m_axis_tvalid` is the DUT's own output (driven internally by `assign m_axis_tvalid = window_valid`) — the testbench was never supposed to drive it. The resulting driver conflict permanently corrupted `m_axis_tvalid` to a stuck `1` the first time that stall case fired, producing a very convincing-looking (but entirely testbench-side) failure with `expected_valid` mismatches for the rest of the run. Fixed by only stalling the two genuine inputs (`s_axis_tvalid`, `m_axis_tready`) in that case, never the output. Root-caused by isolating variables methodically: confirming a clean, stall-free run at the same image size first, then a clean single-stall run, before trusting the randomized version — which correctly proved the DUT itself was fine and pointed the remaining suspicion at the new driver code.
