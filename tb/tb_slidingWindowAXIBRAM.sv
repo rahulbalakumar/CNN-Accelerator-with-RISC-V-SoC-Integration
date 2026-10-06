@@ -27,7 +27,7 @@ module tb_slidingWindowAXIBRAM;
     logic                  expected_valid;
     int                    transfers = 0;
 
-    slidingWindowAXIBRAM #(
+    slidingWindowAXIBRAM
         .DATA_WIDTH(DATA_WIDTH),
         .ROW_LENGTH(ROW_LENGTH),
         .PADDING(PADDING)
@@ -35,7 +35,7 @@ module tb_slidingWindowAXIBRAM;
 
     initial begin
         clk = 0;
-        forever #5 clk = ~clk;
+        forever
     end
 
     initial begin
@@ -43,7 +43,6 @@ module tb_slidingWindowAXIBRAM;
         $dumpvars(0, dut);
 
         rstn          = 0;
-        #10;
         rstn          = 1;
         m_axis_tready = 1;
         s_axis_tvalid = 1;

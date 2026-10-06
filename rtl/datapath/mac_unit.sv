@@ -1,4 +1,4 @@
-module mac_unit#(
+module mac_unit
     parameter DATA_WIDTH = 8,
     parameter PROD_WIDTH = 16
 )(
@@ -9,7 +9,6 @@ module mac_unit#(
     output logic signed [PROD_WIDTH-1:0] product_o
 
 );
-    // stage 1 a register interface between the input and the multiplier to innitiate DSP blocks.
     logic signed [DATA_WIDTH-1:0] pixel_r, weight_r;
 
 
@@ -23,7 +22,6 @@ module mac_unit#(
          end
     end
 
-    // stage 2 multiply and output register
 
     always_ff @(posedge clk or negedge rst_n) begin
         if(!rst_n)

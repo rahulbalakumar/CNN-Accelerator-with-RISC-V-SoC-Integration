@@ -1,10 +1,10 @@
-module relu_activation #(
+module relu_activation
     parameter DATA_WIDTH = 8
 )(
     input  logic                          clk,
     input  logic                          rst_n,
     input  logic                          valid_in,
-    input  logic signed [DATA_WIDTH-1:0]  data_in,     // from quant_saturate_unit
+    input  logic signed [DATA_WIDTH-1:0]  data_in,
     output logic signed [DATA_WIDTH-1:0]  data_out,
     output logic                          valid_out
 );

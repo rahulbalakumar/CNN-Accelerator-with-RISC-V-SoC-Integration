@@ -1,5 +1,5 @@
 `timescale 1 ns / 1 ps
-module uart_peripheral #(
+module uart_peripheral
     parameter CLK_FREQ  = 50000000,
     parameter BAUD_RATE = 115200
 )(
@@ -102,7 +102,7 @@ module uart_peripheral #(
             if (rx_bit_cnt == 0) begin
                 if (!rx_sync2) begin
                     rx_clk_cnt <= CLOCK_DIVIDE / 2;
-                    rx_bit_cnt <= 9;
+                    rx_bit_cnt <= 10;
                 end
             end else begin
                 if (rx_clk_cnt == CLOCK_DIVIDE - 1) begin

@@ -42,7 +42,7 @@ module soc_top (
     logic        gpio_valid,     gpio_ready;
     logic [31:0] gpio_rdata;
     logic        class_weight_valid;
-    picorv32 #(
+    picorv32
         .PROGADDR_RESET(32'h0000_0000)
     ) cpu (
         .clk       (clk),
@@ -122,22 +122,53 @@ module soc_top (
         .ready    (gpio_ready),
         .gpio_out (gpio_out)
     );
-    logic [7:0] pixel_axis_tdata;
-    logic       pixel_axis_tvalid;
-    logic       pixel_axis_tready;
-    logic [7:0] window_data [0:2][0:2];
-    logic       window_valid;
-    logic       window_ready;
-    assign pixel_axis_tdata  = mem_wdata[7:0];
-    assign pixel_axis_tvalid = img_bram_valid & (|mem_wstrb);
-    slidingWindowAXI #(
+    logic [13:0] bram_addr;
+    logic [31:0] bram_rdata;
+    logic [31:0] img_base;
+    logic [31:0] img_len;
+    logic        re_start;
+    logic        re_done;
+    logic        re_busy;
+
+    shared_bram
+        .DEPTH(1024)
+    ) img_bram (
+        .clk(clk),
+        .a_addr(mem_addr),
+        .a_wdata(mem_wdata),
+        .a_wstrb(mem_wstrb),
+        .a_en(img_bram_valid),
+        .a_rdata(img_bram_rdata),
+        .b_addr(bram_addr),
+        .b_rdata(bram_rdata)
+    );
+
+    read_engine re (
+        .clk(clk),
+        .resetn(resetn),
+        .start(re_start),
+        .img_base(img_base),
+        .img_len(img_len),
+        .done(re_done),
+        .busy(re_busy),
+        .bram_addr(bram_addr),
+        .bram_rdata(bram_rdata),
+        .m_axis_tdata(pixel_axis_tdata),
+        .m_axis_tvalid(pixel_axis_tvalid),
+        .m_axis_tuser(),
+        .m_axis_tready(pixel_axis_tready)
+    );
+
+    slidingWindowAXIBRAM
         .DATA_WIDTH(8),
-        .ROW_LENGTH(28)
+        .ROW_LENGTH(28),
+        .PADDING(1)
     ) window_gen (
         .clk           (clk),
         .rstn          (resetn),
         .s_axis_tdata  (pixel_axis_tdata),
         .s_axis_tvalid (pixel_axis_tvalid),
+        .s_axis_tuser  (1'b0),
         .s_axis_tready (pixel_axis_tready),
         .m_axis_tdata  (window_data),
         .m_axis_tvalid (window_valid),
@@ -153,20 +184,28 @@ module soc_top (
     logic [31:0] result_latch;
     always_ff @(posedge clk or negedge resetn) begin
         if (!resetn) begin
-            dp_enable   <= 1'b0;
+            dp_enable   <= 1'b1;
+            re_start    <= 1'b0;
+            img_base    <= '0;
+            img_len     <= '0;
             dp_weights  <= '0;
             dp_bias     <= '0;
             dp_shift_s  <= '0;
-        end else if (mac_ctrl_valid && mem_wstrb != 4'b0000) begin
-            case (mem_addr[7:0])
-                8'h00: dp_enable          <= mem_wdata[0];
-                8'h04: dp_weights[31:0]   <= mem_wdata;
-                8'h08: dp_weights[63:32]  <= mem_wdata;
-                8'h0C: dp_weights[71:64]  <= mem_wdata[7:0];
-                8'h10: dp_bias            <= mem_wdata[15:0];
-                8'h14: dp_shift_s         <= mem_wdata[4:0];
-                default: ;
-            endcase
+        end else begin
+            re_start <= 1'b0;
+            if (mac_ctrl_valid && mem_wstrb != 4'b0000) begin
+                case (mem_addr[7:0])
+                    8'h00: re_start           <= mem_wdata[0];
+                    8'h04: img_base           <= mem_wdata;
+                    8'h08: img_len            <= mem_wdata;
+                    8'h0C: dp_weights[31:0]   <= mem_wdata;
+                    8'h10: dp_weights[63:32]  <= mem_wdata;
+                    8'h14: dp_weights[71:64]  <= mem_wdata[7:0];
+                    8'h18: dp_bias            <= mem_wdata[15:0];
+                    8'h1C: dp_shift_s         <= mem_wdata[4:0];
+                    default: ;
+                endcase
+            end
         end
     end
     logic [71:0] dp_pixels;
@@ -179,9 +218,9 @@ module soc_top (
         end
     endgenerate
 
-    assign window_ready = dp_enable; // No FIFO backpressure needed
+    assign window_ready = dp_enable;
 
-    datapath_top #(
+    datapath_top
         .DATA_WIDTH  (8),
         .PROD_WIDTH  (16),
         .SHIFT_WIDTH (5),
@@ -215,7 +254,7 @@ module soc_top (
 
     logic [31:0] final_class_reg;
     logic class_ready_flag;
-    
+
     assign result_ready = class_ready_flag;
 
     always_ff @(posedge clk or negedge resetn) begin
@@ -227,7 +266,7 @@ module soc_top (
                 final_class_reg <= {28'h0, class_id};
                 class_ready_flag <= 1'b1;
             end else if (out_bram_valid && !out_bram_ready && mem_wstrb == 4'b0000) begin
-                class_ready_flag <= 1'b0; // CPU reads result
+                class_ready_flag <= 1'b0;
             end
         end
     end
@@ -235,18 +274,26 @@ module soc_top (
     always_ff @(posedge clk or negedge resetn) begin
         if (!resetn) begin
             img_bram_ready <= 1'b0;
-            img_bram_rdata <= 32'h0;
             out_bram_ready <= 1'b0;
             out_bram_rdata <= 32'h0;
             mac_ctrl_ready <= 1'b0;
             mac_ctrl_rdata <= 32'h0;
         end else begin
-            img_bram_ready <= img_bram_valid && (pixel_axis_tready || (mem_wstrb == 4'b0000));
-            img_bram_rdata <= 32'h0;
+            img_bram_ready <= img_bram_valid;
             out_bram_ready <= out_bram_valid;
             out_bram_rdata <= final_class_reg;
             mac_ctrl_ready <= mac_ctrl_valid;
-            mac_ctrl_rdata <= {30'h0, result_ready, dp_enable};
+
+            if (mac_ctrl_valid && mem_wstrb == 4'b0000) begin
+                case (mem_addr[7:0])
+                    8'h00: mac_ctrl_rdata <= {29'h0, re_busy, result_ready, re_start};
+                    8'h04: mac_ctrl_rdata <= img_base;
+                    8'h08: mac_ctrl_rdata <= img_len;
+                    default: mac_ctrl_rdata <= 32'h0;
+                endcase
+            end else begin
+                mac_ctrl_rdata <= 32'h0;
+            end
         end
     end
     function [6:0] hex_decode;

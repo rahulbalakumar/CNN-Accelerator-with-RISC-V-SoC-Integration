@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module slidingWindowAXIBRAM #(
+module slidingWindowAXIBRAM
     parameter int DATA_WIDTH = 8,
     parameter int ROW_LENGTH = 640,
     parameter bit PADDING = 0
@@ -8,13 +8,11 @@ module slidingWindowAXIBRAM #(
     input logic clk,
     input logic rstn,
 
-    // Input Pixel Stream (Slave)
     input logic [DATA_WIDTH-1:0] s_axis_tdata,
     input logic s_axis_tvalid,
     input logic s_axis_tuser,
     output logic s_axis_tready,
 
-    // 3x3 Matrix Output Stream (Master)
     output logic [DATA_WIDTH-1:0] m_axis_tdata [0:2] [0:2],
     output logic m_axis_tvalid,
     input logic m_axis_tready
@@ -23,9 +21,9 @@ module slidingWindowAXIBRAM #(
 
     logic [31:0] pixel_count;
 
-    
+
     logic pending;
-    logic en;   
+    logic en;
     logic [$clog2(ROW_LENGTH)-1 : 0] live_col;
     logic [$clog2(ROW_LENGTH)-1 : 0] live_row;
     logic window_valid;
@@ -59,7 +57,7 @@ module slidingWindowAXIBRAM #(
         end
     end
 
-    
+
     assign m_axis_tvalid = window_valid && pending && (PADDING || interior);
     always_ff @(posedge clk or negedge rstn) begin
         if (!rstn) begin
@@ -75,7 +73,7 @@ module slidingWindowAXIBRAM #(
 
     assign window_valid = (pixel_count >= ROW_LENGTH + 4);
 
-    always_ff @(posedge clk or negedge rstn) begin // Horizontal
+    always_ff @(posedge clk or negedge rstn) begin
         if (!rstn) begin
             live_col <= '0;
         end else begin
@@ -92,7 +90,7 @@ module slidingWindowAXIBRAM #(
     logic [DATA_WIDTH-1:0] line_out_1;
     logic [DATA_WIDTH-1:0] line_out_2;
 
-    lineBufferAXIBRAM #(
+    lineBufferAXIBRAM
         .DATA_WIDTH(DATA_WIDTH),
         .ROW_LENGTH(ROW_LENGTH)
     ) buffer1 (
@@ -103,7 +101,7 @@ module slidingWindowAXIBRAM #(
         .data_out(line_out_1)
     );
 
-    lineBufferAXIBRAM #(
+    lineBufferAXIBRAM
         .DATA_WIDTH(DATA_WIDTH),
         .ROW_LENGTH(ROW_LENGTH)
     ) buffer2 (
@@ -117,7 +115,7 @@ module slidingWindowAXIBRAM #(
     logic [DATA_WIDTH-1:0] reg_row_1 [0:2];
     logic [DATA_WIDTH-1:0] reg_row_2 [0:2];
     logic [DATA_WIDTH-1:0] reg_row_3 [0:2];
-    
+
     logic [DATA_WIDTH-1:0] s_axis_tdata_delay;
     logic [DATA_WIDTH-1:0] s_axis_tdata_delay2;
     logic [DATA_WIDTH-1:0] line_out_1_delay;
@@ -130,7 +128,7 @@ module slidingWindowAXIBRAM #(
             s_axis_tdata_delay <= s_axis_tdata;
             s_axis_tdata_delay2 <= s_axis_tdata_delay;
             line_out_1_delay <= line_out_1;
-        end 
+        end
     end
 
 
@@ -171,11 +169,11 @@ module slidingWindowAXIBRAM #(
     end
 
 
-    assign right_ok = (center_col <= ROW_LENGTH - 2);  
-    assign left_ok  = (center_col >= 1);            
-    assign top_ok   = (center_row >= 1);     
-    assign bottom_ok = (center_row <= ROW_LENGTH - 2);      
-    assign interior = (top_ok && bottom_ok && left_ok && right_ok);  
+    assign right_ok = (center_col <= ROW_LENGTH - 2);
+    assign left_ok  = (center_col >= 1);
+    assign top_ok   = (center_row >= 1);
+    assign bottom_ok = (center_row <= ROW_LENGTH - 2);
+    assign interior = (top_ok && bottom_ok && left_ok && right_ok);
     always_comb begin
         m_axis_tdata[0][0] = (top_ok && left_ok)  ? reg_row_3[2] : '0;
         m_axis_tdata[0][1] = (top_ok)             ? reg_row_3[1] : '0;

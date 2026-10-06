@@ -18,7 +18,7 @@ firmware.bin: firmware.elf
 	$(OBJCOPY) -O binary firmware.elf firmware.bin
 
 firmware.hex: firmware.bin
-	python3 -c "b=open('firmware.bin','rb').read(); h=open('firmware.hex','w'); [h.write('%02x\n' % x) for x in b]; h.close()"
+	python3 -c "b=open('firmware.bin','rb').read(); b+=b'\0'*((4-len(b)%4)%4); h=open('firmware.hex','w'); [h.write('%08x\n' % int.from_bytes(b[i:i+4], 'little')) for i in range(0, len(b), 4)]; h.close()"
 
 clean:
 	rm -f *.o *.elf *.bin *.hex
