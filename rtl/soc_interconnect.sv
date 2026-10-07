@@ -36,13 +36,13 @@ module soc_interconnect (
     logic sel_mac_ctrl;
     logic sel_gpio;
     logic sel_class_weight;
-    assign sel_ram      = (mem_addr[31:28] == 4'h0);
-    assign sel_uart     = (mem_addr[31:28] == 4'h1);
-    assign sel_img_bram = (mem_addr[31:28] == 4'h2);
-    assign sel_out_bram = (mem_addr[31:28] == 4'h3);
-    assign sel_mac_ctrl = (mem_addr[31:28] == 4'h4);
-    assign sel_gpio     = (mem_addr[31:28] == 4'h5);
-    assign sel_class_weight = (mem_addr[31:28] == 4'h6);
+    assign sel_ram      = (mem_addr[31:28] == 4'h0); // Selects RAM
+    assign sel_uart     = (mem_addr[31:28] == 4'h1); // Selects UART
+    assign sel_img_bram = (mem_addr[31:28] == 4'h2); // Selects Image Port
+    assign sel_out_bram = (mem_addr[31:28] == 4'h3); // Selects Result
+    assign sel_mac_ctrl = (mem_addr[31:28] == 4'h4); // Selects Convolution Control
+    assign sel_gpio     = (mem_addr[31:28] == 4'h5); // Selects GPIO
+    assign sel_class_weight = (mem_addr[31:28] == 4'h6); // Selects Dense Weights
     assign ram_valid      = mem_valid & sel_ram;
     assign uart_valid     = mem_valid & sel_uart;
     assign img_bram_valid = mem_valid & sel_img_bram;

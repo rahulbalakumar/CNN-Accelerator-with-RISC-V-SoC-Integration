@@ -39,10 +39,10 @@ module uart_peripheral #(
                         tx_start <= 1'b1;
                     end
                 end else begin
-                    if (addr[3:0] == 4'h0) begin
-                        rdata       <= {24'h0, rx_data};
+                    if (addr[3:0] == 4'h0) begin // Data Register
+                        rdata       <= {24'h0, rx_data}; 
                         rx_read_ack <= 1'b1;
-                    end else if (addr[3:0] == 4'h4) begin
+                    end else if (addr[3:0] == 4'h4) begin // Status Register
                         rdata <= {30'h0, rx_valid, tx_ready};
                     end else begin
                         rdata <= 32'h0;
@@ -102,7 +102,7 @@ module uart_peripheral #(
             if (rx_bit_cnt == 0) begin
                 if (!rx_sync2) begin
                     rx_clk_cnt <= CLOCK_DIVIDE / 2;
-                    rx_bit_cnt <= 9;
+                    rx_bit_cnt <= 10;
                 end
             end else begin
                 if (rx_clk_cnt == CLOCK_DIVIDE - 1) begin

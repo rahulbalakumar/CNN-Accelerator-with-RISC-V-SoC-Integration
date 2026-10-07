@@ -25,7 +25,7 @@ module gpio_peripheral (
             if (valid && !ready) begin
                 ready <= 1'b1;
 
-                if (wstrb != 4'b0000) begin
+                if (wstrb != 4'b0000) begin 
                     if (addr[3:0] == 4'h0) begin
                         if (wstrb[0]) gpio_out[7:0]   <= wdata[7:0];
                         if (wstrb[1]) gpio_out[15:8]  <= wdata[15:8];

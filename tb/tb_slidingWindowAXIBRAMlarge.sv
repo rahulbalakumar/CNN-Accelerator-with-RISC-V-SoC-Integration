@@ -2,9 +2,10 @@
 module tb_slidingWindowAXIBRAM;
 
     localparam int DATA_WIDTH       = 8;
-    localparam int ROW_LENGTH       = 5;
+    localparam int ROW_LENGTH       = 28;
     localparam bit PADDING = 0;
     localparam int DRAIN = PADDING ? (ROW_LENGTH + 3) : 2;
+    localparam int SENT_PIXEL_WIDTH = ROW_LENGTH * ROW_LENGTH + DRAIN;
     localparam int FRAMES = 2;
     localparam int EXPECTED_WINDOWS = FRAMES * (PADDING ? (ROW_LENGTH * ROW_LENGTH) : ((ROW_LENGTH - 2) * (ROW_LENGTH - 2)));
     
@@ -22,7 +23,7 @@ module tb_slidingWindowAXIBRAM;
     logic                  m_axis_tvalid;
     logic                  m_axis_tready;
 
-    logic [DATA_WIDTH-1:0] sent_pixels [0:63];
+    logic [DATA_WIDTH-1:0] sent_pixels [0:SENT_PIXEL_WIDTH-1];
     int                    n;
     logic                  tb_pending;
     logic                  expected_valid;
@@ -48,6 +49,7 @@ module tb_slidingWindowAXIBRAM;
         rstn          = 1;
         m_axis_tready = 1;
         s_axis_tvalid = 1;
+        s_axis_tuser = 0;
         for (int f = 0; f < FRAMES; f++) begin
             for (int i = 0; i < ROW_LENGTH * ROW_LENGTH; i++) begin
                 @(negedge clk);
@@ -61,7 +63,6 @@ module tb_slidingWindowAXIBRAM;
                 s_axis_tuser = 0;
             end
         end
-
         @(negedge clk);
         s_axis_tvalid = 0;
         repeat (2) @(negedge clk);
@@ -140,13 +141,6 @@ module tb_slidingWindowAXIBRAM;
         bottom_ok = (center_row <= ROW_LENGTH - 2);
     endfunction
 
-    always_comb begin
-        logic r_ok, l_ok, t_ok, b_ok;
-        get_masks(n, r_ok, l_ok, t_ok, b_ok);
-        expected_valid = (n >= ROW_LENGTH + 4) && tb_pending
-                         && (PADDING || (r_ok && l_ok && t_ok && b_ok));
-    end
-
     always @(negedge clk) begin
         if (expected_valid != m_axis_tvalid)
             $display("expected_valid = %0d not matching m_axis_tvalid = %0d, n = %0d, time = %0d",
@@ -197,5 +191,4 @@ module tb_slidingWindowAXIBRAM;
                 $display("MISMATCH [2][2] at time %0t: expected %0d, got %0d", $time, expected_masked, m_axis_tdata[2][2]);
         end
     end
-
 endmodule

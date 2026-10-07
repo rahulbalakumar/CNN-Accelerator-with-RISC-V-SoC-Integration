@@ -20,14 +20,13 @@ module slidingWindowAXIBRAM #(
     input logic m_axis_tready
 
 );
-
-    logic [31:0] pixel_count;
+    localparam int DRAIN = (PADDING) ? ROW_LENGTH + 3 : 2;
+    localparam int PIXEL_WIDTH = $clog2(ROW_LENGTH*ROW_LENGTH + DRAIN + 1);
+    logic [PIXEL_WIDTH-1:0] pixel_count;
 
     
     logic pending;
     logic en;   
-    logic [$clog2(ROW_LENGTH)-1 : 0] live_col;
-    logic [$clog2(ROW_LENGTH)-1 : 0] live_row;
     logic window_valid;
     logic interior;
 
@@ -61,33 +60,9 @@ module slidingWindowAXIBRAM #(
 
     
     assign m_axis_tvalid = window_valid && pending && (PADDING || interior);
-    always_ff @(posedge clk or negedge rstn) begin
-        if (!rstn) begin
-            live_row <= '0;
-        end else begin
-            if (en) begin
-                if (live_col == ROW_LENGTH-1) begin
-                    live_row <= live_row + 1;
-                end
-            end
-        end
-    end
 
     assign window_valid = (pixel_count >= ROW_LENGTH + 4);
 
-    always_ff @(posedge clk or negedge rstn) begin // Horizontal
-        if (!rstn) begin
-            live_col <= '0;
-        end else begin
-            if (en) begin
-                if (live_col == ROW_LENGTH - 1) begin
-                    live_col <= '0;
-                end else begin
-                    live_col <= live_col + 1;
-                end
-            end
-        end
-    end
 
     logic [DATA_WIDTH-1:0] line_out_1;
     logic [DATA_WIDTH-1:0] line_out_2;
@@ -156,12 +131,12 @@ module slidingWindowAXIBRAM #(
         end
     end
 
-    int center_index;
+    logic [PIXEL_WIDTH-1:0] center_index;
     logic [$clog2(ROW_LENGTH)-1:0] center_row, center_col;
     logic right_ok, left_ok, top_ok, bottom_ok;
     always_comb begin
         center_index = pixel_count - (ROW_LENGTH + 4);
-        if (center_index >= 0) begin
+        if (window_valid) begin
             center_row = center_index / ROW_LENGTH;
             center_col = center_index % ROW_LENGTH;
         end else begin
