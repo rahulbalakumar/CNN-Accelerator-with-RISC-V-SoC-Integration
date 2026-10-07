@@ -130,18 +130,21 @@ module soc_top (
     logic        re_done;
     logic        re_busy;
 
-    shared_bram
+    shared_bram #(
         .DEPTH(1024)
     ) img_bram (
         .clk(clk),
         .a_addr(mem_addr),
         .a_wdata(mem_wdata),
         .a_wstrb(mem_wstrb),
-        .a_en(img_bram_valid),
-        .a_rdata(img_bram_rdata),
+        .a_en(img_bram_valid && (|mem_wstrb)),
+        .a_rdata(),
         .b_addr(bram_addr),
         .b_rdata(bram_rdata)
     );
+    assign img_bram_rdata = 32'h0;
+
+    logic pixel_axis_tuser;
 
     read_engine re (
         .clk(clk),
@@ -155,20 +158,20 @@ module soc_top (
         .bram_rdata(bram_rdata),
         .m_axis_tdata(pixel_axis_tdata),
         .m_axis_tvalid(pixel_axis_tvalid),
-        .m_axis_tuser(),
+        .m_axis_tuser(pixel_axis_tuser),
         .m_axis_tready(pixel_axis_tready)
     );
 
-    slidingWindowAXIBRAM
+    slidingWindowAXIBRAM #(
         .DATA_WIDTH(8),
         .ROW_LENGTH(28),
-        .PADDING(1)
+        .PADDING(0)
     ) window_gen (
         .clk           (clk),
         .rstn          (resetn),
         .s_axis_tdata  (pixel_axis_tdata),
         .s_axis_tvalid (pixel_axis_tvalid),
-        .s_axis_tuser  (1'b0),
+        .s_axis_tuser  (pixel_axis_tuser),
         .s_axis_tready (pixel_axis_tready),
         .m_axis_tdata  (window_data),
         .m_axis_tvalid (window_valid),
@@ -195,7 +198,7 @@ module soc_top (
             re_start <= 1'b0;
             if (mac_ctrl_valid && mem_wstrb != 4'b0000) begin
                 case (mem_addr[7:0])
-                    8'h00: re_start           <= mem_wdata[0];
+                    8'h00: re_start           <= mem_wdata[0] && !re_busy;
                     8'h04: img_base           <= mem_wdata;
                     8'h08: img_len            <= mem_wdata;
                     8'h0C: dp_weights[31:0]   <= mem_wdata;
@@ -220,7 +223,7 @@ module soc_top (
 
     assign window_ready = dp_enable;
 
-    datapath_top
+    datapath_top #(
         .DATA_WIDTH  (8),
         .PROD_WIDTH  (16),
         .SHIFT_WIDTH (5),
@@ -265,7 +268,7 @@ module soc_top (
             if (class_valid) begin
                 final_class_reg <= {28'h0, class_id};
                 class_ready_flag <= 1'b1;
-            end else if (out_bram_valid && !out_bram_ready && mem_wstrb == 4'b0000) begin
+            end else if (re_start || (out_bram_valid && !out_bram_ready && mem_wstrb == 4'b0000)) begin
                 class_ready_flag <= 1'b0;
             end
         end
@@ -279,14 +282,23 @@ module soc_top (
             mac_ctrl_ready <= 1'b0;
             mac_ctrl_rdata <= 32'h0;
         end else begin
-            img_bram_ready <= img_bram_valid;
-            out_bram_ready <= out_bram_valid;
-            out_bram_rdata <= final_class_reg;
-            mac_ctrl_ready <= mac_ctrl_valid;
+            img_bram_ready <= 1'b0;
+            if (img_bram_valid && !img_bram_ready)
+                img_bram_ready <= 1'b1;
 
-            if (mac_ctrl_valid && mem_wstrb == 4'b0000) begin
+            out_bram_ready <= 1'b0;
+            if (out_bram_valid && !out_bram_ready)
+                out_bram_ready <= 1'b1;
+
+            out_bram_rdata <= final_class_reg;
+
+            mac_ctrl_ready <= 1'b0;
+            if (mac_ctrl_valid && !mac_ctrl_ready)
+                mac_ctrl_ready <= 1'b1;
+
+            if (mac_ctrl_valid && !mac_ctrl_ready && mem_wstrb == 4'b0000) begin
                 case (mem_addr[7:0])
-                    8'h00: mac_ctrl_rdata <= {29'h0, re_busy, result_ready, re_start};
+                    8'h00: mac_ctrl_rdata <= {30'h0, result_ready, re_busy};
                     8'h04: mac_ctrl_rdata <= img_base;
                     8'h08: mac_ctrl_rdata <= img_len;
                     default: mac_ctrl_rdata <= 32'h0;

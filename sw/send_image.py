@@ -1,13 +1,20 @@
 """
 send_image.py — Host-side script for the CNN Accelerator RISC-V SoC
 
-Protocol (per image):
-  1. Host sends 'S'  (start token)
-  2. Host sends 9 signed bytes  (3x3 kernel weights, row-major)
-  3. Host sends 2 bytes  (bias, little-endian signed int16)
-  4. Host sends 1 byte   (shift_s, 0-31)
-  5. Host sends 784 bytes (28x28 grayscale image, row-major, unsigned)
-  6. FPGA sends back 'R' + 1 result byte
+Protocol (boot):
+  1. Host sends 'S' (start token)
+  2. Host sends 9 signed bytes (3x3 kernel weights)
+  3. Host sends 2 bytes (bias)
+  4. Host sends 1 byte (shift_s)
+  5. Host sends 1690 bytes (dense weights)
+  6. Host sends 20 bytes (10 dense biases)
+  7. Host sends 784 bytes (image)
+  8. FPGA sends back 'R' + 1 result byte
+
+Protocol (per image after boot):
+  1. Host sends 'S' (start token)
+  2. Host sends 784 bytes (image)
+  3. FPGA sends back 'R' + 1 result byte
 """
 
 import serial
@@ -22,13 +29,11 @@ BAUD_RATE = 115200
 
 IMAGE_W   = 28
 IMAGE_H   = 28
-NUM_WINDOWS = (IMAGE_W - 2) * (IMAGE_H - 2)
-
 
 def send_image(image_bytes, kernel, bias, shift_s, dense_weights, dense_biases, port=COM_PORT, first_run=True):
     assert len(image_bytes) == IMAGE_W * IMAGE_H, "Image must be 784 bytes"
     assert len(kernel) == 9,                      "Kernel must be 9 values"
-    assert len(dense_weights) == 1960,            "Dense weights must be 1960 values"
+    assert len(dense_weights) == 1690,            "Dense weights must be 1690 values"
     assert len(dense_biases) == 10,               "Dense biases must be 10 values"
     assert -128 <= bias <= 127 or -32768 <= bias <= 32767, "Bias out of range"
     assert 0 <= shift_s <= 31,                    "shift_s must be 0-31"
@@ -92,10 +97,9 @@ def make_edge_kernel():
     return kernel, bias, shift_s
 
 
-
 def generate_dummy_dense_weights():
     """Generates random weights for the dense layer to simulate a trained model."""
-    weights = [int(random.uniform(-10, 10)) for _ in range(1960)]
+    weights = [int(random.uniform(-10, 10)) for _ in range(1690)]
     biases = [int(random.uniform(-50, 50)) for _ in range(10)]
     return weights, biases
 
@@ -108,7 +112,7 @@ if __name__ == "__main__":
     print(f"Kernel: {kernel}  bias={bias}  shift_s={shift_s}")
 
     print("\n--- Running Full Hardware CNN Accelerator ---")
-    predicted_digit = send_image(image_bytes, kernel, bias, shift_s, dense_weights, dense_biases)
+    predicted_digit = send_image(image_bytes, kernel, bias, shift_s, dense_weights, dense_biases, first_run=True)
 
     print(f"\n>>> FPGA HARDWARE PREDICTED DIGIT: {predicted_digit} <<<")
     print("Classification was completely performed in hardware!")
