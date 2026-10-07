@@ -175,7 +175,7 @@ module soc_top (
         .s_axis_tready (pixel_axis_tready),
         .m_axis_tdata  (window_data),
         .m_axis_tvalid (window_valid),
-        .m_axis_tready (window_ready)
+        .m_axis_tready (1'b1)
     );
     logic [71:0] dp_weights;
     logic [15:0] dp_bias;
@@ -249,6 +249,7 @@ module soc_top (
         .weight_wr_en(class_weight_valid && (|mem_wstrb)),
         .weight_addr(mem_addr),
         .weight_wdata(mem_wdata),
+        .accel_start(re_start),
         .valid_in(dp_valid_out),
         .data_in(dp_relu_out),
         .valid_out(class_valid),

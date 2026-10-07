@@ -8,6 +8,7 @@ module classifier_top (
     input  logic [31:0] weight_addr,
     input  logic [31:0] weight_wdata,
 
+    input  logic        accel_start,
     input  logic        valid_in,
     input  logic [7:0]  data_in,
 
@@ -24,6 +25,7 @@ module classifier_top (
     ) pool (
         .clk(clk),
         .rst_n(rst_n),
+        .accel_start(accel_start),
         .valid_in(valid_in),
         .data_in(data_in),
         .valid_out(pool_valid),
@@ -39,6 +41,7 @@ module classifier_top (
         .weight_wr_en(weight_wr_en),
         .weight_addr(weight_addr),
         .weight_wdata(weight_wdata),
+        .accel_start(accel_start),
         .valid_in(pool_valid),
         .data_in(pool_data),
         .valid_out(dense_valid),

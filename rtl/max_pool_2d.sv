@@ -6,6 +6,7 @@ module max_pool_2d
 )(
     input  logic clk,
     input  logic rst_n,
+    input  logic accel_start,
     input  logic valid_in,
     input  logic [DATA_WIDTH-1:0] data_in,
     output logic valid_out,
@@ -23,6 +24,11 @@ module max_pool_2d
             data_out <= 0;
             temp_max <= 0;
             for (int i=0; i<(WIDTH/2); i++) line_buf[i] <= 0;
+        end else if (accel_start) begin
+            r <= 0;
+            c <= 0;
+            valid_out <= 0;
+            temp_max <= 0;
         end else begin
             valid_out <= 1'b0;
             if (valid_in) begin

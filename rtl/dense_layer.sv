@@ -8,6 +8,7 @@ module dense_layer (
     input  logic [31:0] weight_addr,
     input  logic [31:0] weight_wdata,
 
+    input  logic        accel_start,
     input  logic        valid_in,
     input  logic [7:0]  data_in,
 
@@ -40,6 +41,12 @@ module dense_layer (
             for (int i=0; i<10; i++) begin
                 accum[i] <= 0;
                 logits[i] <= 0;
+            end
+        end else if (accel_start) begin
+            pixel_count <= 0;
+            valid_out <= 0;
+            for (int i=0; i<10; i++) begin
+                accum[i] <= 0;
             end
         end else begin
             valid_out <= 0;
