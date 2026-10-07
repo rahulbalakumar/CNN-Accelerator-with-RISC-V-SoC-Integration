@@ -11,7 +11,7 @@ module lineBufferAXIBRAM
     output logic [DATA_WIDTH-1:0] data_out
 );
 
-    (* ramstyle = "M9K" *)    logic [DATA_WIDTH-1:0] mem [0:ROW_LENGTH-1];
+    (* ramstyle = "M9K" *)    logic [DATA_WIDTH-1:0] mem [0:ROW_LENGTH-1]; // To instantiate BRAM on the FPGA
     logic [$clog2(ROW_LENGTH)-1:0] ptr;
 
     always_ff @(posedge clk or negedge rstn) begin
