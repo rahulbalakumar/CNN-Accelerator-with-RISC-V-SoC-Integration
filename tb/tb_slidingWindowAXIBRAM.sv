@@ -61,7 +61,6 @@ module tb_slidingWindowAXIBRAM;
                 s_axis_tuser = 0;
             end
         end
-
         @(negedge clk);
         s_axis_tvalid = 0;
         repeat (2) @(negedge clk);
@@ -140,13 +139,6 @@ module tb_slidingWindowAXIBRAM;
         bottom_ok = (center_row <= ROW_LENGTH - 2);
     endfunction
 
-    always_comb begin
-        logic r_ok, l_ok, t_ok, b_ok;
-        get_masks(n, r_ok, l_ok, t_ok, b_ok);
-        expected_valid = (n >= ROW_LENGTH + 4) && tb_pending
-                         && (PADDING || (r_ok && l_ok && t_ok && b_ok));
-    end
-
     always @(negedge clk) begin
         if (expected_valid != m_axis_tvalid)
             $display("expected_valid = %0d not matching m_axis_tvalid = %0d, n = %0d, time = %0d",
@@ -197,5 +189,4 @@ module tb_slidingWindowAXIBRAM;
                 $display("MISMATCH [2][2] at time %0t: expected %0d, got %0d", $time, expected_masked, m_axis_tdata[2][2]);
         end
     end
-
 endmodule

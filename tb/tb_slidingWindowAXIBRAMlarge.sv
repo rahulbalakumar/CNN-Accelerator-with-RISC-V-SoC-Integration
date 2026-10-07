@@ -3,7 +3,7 @@ module tb_slidingWindowAXIBRAM;
 
     localparam int DATA_WIDTH       = 8;
     localparam int ROW_LENGTH       = 28;
-    localparam bit PADDING = 0;
+    localparam bit PADDING = 1;
     localparam int DRAIN = PADDING ? (ROW_LENGTH + 3) : 2;
     localparam int SENT_PIXEL_WIDTH = ROW_LENGTH * ROW_LENGTH + DRAIN;
     localparam int FRAMES = 2;
