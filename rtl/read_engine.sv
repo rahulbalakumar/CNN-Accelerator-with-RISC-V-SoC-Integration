@@ -29,6 +29,15 @@ module read_engine (
     assign busy = (state != IDLE);
     assign done = (state == IDLE) && (count == img_len) && (img_len > 0);
 
+    always_comb begin
+        case (byte_idx)
+            2'b00: m_axis_tdata = current_word[7:0];
+            2'b01: m_axis_tdata = current_word[15:8];
+            2'b10: m_axis_tdata = current_word[23:16];
+            2'b11: m_axis_tdata = current_word[31:24];
+        endcase
+    end
+
     always_ff @(posedge clk or negedge resetn) begin
         if (!resetn) begin
             state <= IDLE;
@@ -36,7 +45,6 @@ module read_engine (
             bram_addr <= 0;
             byte_idx <= 0;
             m_axis_tvalid <= 0;
-            m_axis_tdata <= 0;
             m_axis_tuser <= 0;
             current_word <= 0;
         end else begin
@@ -57,20 +65,12 @@ module read_engine (
 
                 READ_WAIT: begin
                     current_word <= bram_rdata;
+                    m_axis_tvalid <= 1;
+                    m_axis_tuser <= (count == 0);
                     state <= STREAM;
                 end
 
                 STREAM: begin
-                    m_axis_tvalid <= 1;
-                    m_axis_tuser <= (count == 0);
-
-                    case (byte_idx)
-                        2'b00: m_axis_tdata <= current_word[7:0];
-                        2'b01: m_axis_tdata <= current_word[15:8];
-                        2'b10: m_axis_tdata <= current_word[23:16];
-                        2'b11: m_axis_tdata <= current_word[31:24];
-                    endcase
-
                     if (m_axis_tready) begin
                         count <= count + 1;
                         if (count + 1 == img_len) begin
@@ -83,6 +83,7 @@ module read_engine (
                             m_axis_tvalid <= 0;
                         end else begin
                             byte_idx <= byte_idx + 1;
+                            m_axis_tuser <= 1'b0;
                         end
                     end
                 end

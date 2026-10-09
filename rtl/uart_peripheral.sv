@@ -1,5 +1,5 @@
 `timescale 1 ns / 1 ps
-module uart_peripheral
+module uart_peripheral #(
     parameter CLK_FREQ  = 50000000,
     parameter BAUD_RATE = 115200
 )(

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module shared_bram
+module shared_bram #(
     parameter int DEPTH = 1024
 )(
     input  logic clk,
