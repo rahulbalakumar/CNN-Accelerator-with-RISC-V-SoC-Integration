@@ -131,20 +131,32 @@ module slidingWindowAXIBRAM #(
         end
     end
 
-    logic [PIXEL_WIDTH-1:0] center_index;
     logic [$clog2(ROW_LENGTH)-1:0] center_row, center_col;
     logic right_ok, left_ok, top_ok, bottom_ok;
-    always_comb begin
-        center_index = pixel_count - (ROW_LENGTH + 4);
-        if (window_valid) begin
-            center_row = center_index / ROW_LENGTH;
-            center_col = center_index % ROW_LENGTH;
-        end else begin
-            center_row = '0;
-            center_col = '0;
+    
+
+    
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            center_row <= '0;
+            center_col <= '0;
+        end else if (en) begin
+            if (s_axis_tuser) begin
+                center_row <= '0;
+                center_col <= '0;
+            end else if (pixel_count == (ROW_LENGTH + 3)) begin
+                center_row <= '0;
+                center_col <= '0;
+            end else if (window_valid) begin
+                if (center_col == ROW_LENGTH - 1) begin
+                    center_col <= '0;
+                    center_row <= center_row + 1'b1;
+                end else begin
+                    center_col <= center_col + 1'b1;
+                end
+            end
         end
     end
-
 
     assign right_ok = (center_col <= ROW_LENGTH - 2);  
     assign left_ok  = (center_col >= 1);            
