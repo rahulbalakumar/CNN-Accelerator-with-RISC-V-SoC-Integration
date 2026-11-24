@@ -1,118 +1,127 @@
 """
-send_image.py — Host-side script for the CNN Accelerator RISC-V SoC
+send_image.py - Run real MNIST digits through the FPGA and collect the measurements.
 
-Protocol (boot):
-  1. Host sends 'S' (start token)
-  2. Host sends 9 signed bytes (3x3 kernel weights)
-  3. Host sends 2 bytes (bias)
-  4. Host sends 1 byte (shift_s)
-  5. Host sends 1690 bytes (dense weights)
-  6. Host sends 20 bytes (10 dense biases)
-  7. Host sends 784 bytes (image)
-  8. FPGA sends back 'R' + 1 result byte
+Usage (board programmed, USB-serial cable on the DE2-115 RS-232 port):
+    pip install pyserial numpy torch
+    python send_image.py --port COM3                 # 20 test images (default)
+    python send_image.py --port COM3 --count 100     # more images
+    python send_image.py --port /dev/ttyUSB0 --start 500 --count 50
 
-Protocol (per image after boot):
-  1. Host sends 'S' (start token)
-  2. Host sends 784 bytes (image)
-  3. FPGA sends back 'R' + 1 result byte
+Protocol (see sw/main.c):
+    'W' + 1722 weight bytes          -> 'K'
+    'S' + 784 pixel bytes            -> 'R', digit, acc_cycles (u32 LE), uart_cycles (u32 LE)
+    'B'                              -> 'B', digit, cpu_cycles (u32 LE)   CPU-only baseline
+
+Every FPGA answer is compared with the bit-exact Python integer model (quantize.py),
+so 'matches Python' must be 100%. Accuracy against the MNIST labels is reported
+separately. Results are also saved to sw/board_results.csv.
 """
 
-import serial
-import time
-import sys
+import argparse
+import csv
+import json
+import os
 import struct
-import math
-import random
+import sys
+import time
 
-COM_PORT  = 'COM3'
-BAUD_RATE = 115200
+import numpy as np
+import serial
 
-IMAGE_W   = 28
-IMAGE_H   = 28
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "cnn_fpga"))
+from fpga_model import load_mnist            # noqa: E402
+from quantize import int_forward, uart_bytes  # noqa: E402
 
-def send_image(image_bytes, kernel, bias, shift_s, dense_weights, dense_biases, port=COM_PORT, first_run=True):
-    assert len(image_bytes) == IMAGE_W * IMAGE_H, "Image must be 784 bytes"
-    assert len(kernel) == 9,                      "Kernel must be 9 values"
-    assert len(dense_weights) == 1690,            "Dense weights must be 1690 values"
-    assert len(dense_biases) == 10,               "Dense biases must be 10 values"
-    assert -128 <= bias <= 127 or -32768 <= bias <= 32767, "Bias out of range"
-    assert 0 <= shift_s <= 31,                    "shift_s must be 0-31"
+CLK_HZ = 50_000_000
+PARAMS = os.path.join(HERE, "..", "cnn_fpga", "weights", "quant_params.json")
 
-    print(f"Connecting to FPGA on {port} at {BAUD_RATE} baud...")
-    try:
-        ser = serial.Serial(port, BAUD_RATE, timeout=5)
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
 
-    time.sleep(0.5)
+def load_params():
+    with open(PARAMS) as f:
+        p = json.load(f)
+    return {"conv_w": np.array(p["conv_w"]), "conv_b": int(p["conv_b"]), "shift": int(p["shift"]),
+            "dense_w": np.array(p["dense_w"]), "dense_b": np.array(p["dense_b"])}
 
-    print("Sending start token...")
-    ser.write(b'S')
 
-    if first_run:
-        print("Sending kernel weights (9 bytes)...")
-        ser.write(bytes([w & 0xFF for w in kernel]))
+def read_exact(ser, n, what):
+    data = ser.read(n)
+    if len(data) != n:
+        sys.exit(f"Timeout waiting for {what} (got {len(data)} of {n} bytes). "
+                 "Check the port, the baud rate and that KEY0 is not held down.")
+    return data
 
-        print("Sending bias (2 bytes, little-endian)...")
-        ser.write(struct.pack('<h', bias))
 
-        print("Sending shift_s (1 byte)...")
-        ser.write(bytes([shift_s & 0x1F]))
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", default="COM3")
+    ap.add_argument("--baud", type=int, default=115200, help="must match BAUD_RATE in cnn_soc_top")
+    ap.add_argument("--start", type=int, default=0, help="first MNIST test image index")
+    ap.add_argument("--count", type=int, default=20)
+    args = ap.parse_args()
 
-        print(f"Sending {len(dense_weights)} dense weights...")
-        ser.write(bytes([int(w) & 0xFF for w in dense_weights]))
+    P = load_params()
+    images, labels = load_mnist("test")
+    idx = list(range(args.start, args.start + args.count))
+    _, py_pred = int_forward(images[idx], P)
 
-        print("Sending 10 dense biases...")
-        for b in dense_biases:
-            ser.write(struct.pack('<h', int(b)))
+    ser = serial.Serial(args.port, args.baud, timeout=5)
+    time.sleep(0.3)
+    ser.reset_input_buffer()
 
-    print(f"Sending {IMAGE_W}x{IMAGE_H} image ({len(image_bytes)} bytes)...")
-    ser.write(image_bytes)
+    # 1. Weights, once.
+    t0 = time.perf_counter()
+    ser.write(b"W" + bytes(uart_bytes(P)))
+    if read_exact(ser, 1, "weight ack") != b"K":
+        sys.exit("Bad weight ack")
+    print(f"Weights loaded: 1722 bytes in {time.perf_counter() - t0:.3f} s\n")
 
-    print(f"Waiting for hardware classification result...")
-    result_class = None
-    while True:
-        token = ser.read(1)
-        if token == b'R':
-            val = ser.read(1)
-            if val:
-                result_class = int.from_bytes(val, byteorder='little', signed=False)
-                break
+    # 2. Images.
+    rows = []
+    print(f"{'img':>5} {'label':>5} {'python':>6} {'fpga':>4}  {'acc cyc':>8} {'uart cyc':>9} {'host ms':>8}")
+    for k, i in enumerate(idx):
+        t0 = time.perf_counter()
+        ser.write(b"S" + images[i].tobytes())
+        reply = read_exact(ser, 10, f"result for image {i}")
+        host_ms = (time.perf_counter() - t0) * 1000
+        token, digit, acc_cyc, uart_cyc = struct.unpack("<cBII", reply)
+        if token != b"R":
+            sys.exit(f"Bad reply token {token!r} for image {i}")
+        rows.append({"index": i, "label": int(labels[i]), "python": int(py_pred[k]), "fpga": digit,
+                     "acc_cycles": acc_cyc, "uart_cycles": uart_cyc, "host_ms": round(host_ms, 2)})
+        flag = "" if digit == py_pred[k] else "  <-- MISMATCH vs Python"
+        print(f"{i:>5} {labels[i]:>5} {py_pred[k]:>6} {digit:>4}  {acc_cyc:>8} {uart_cyc:>9} {host_ms:>8.1f}{flag}")
 
+    # 3. CPU-only baseline on the last image.
+    ser.write(b"B")
+    token, cpu_digit, cpu_cyc = struct.unpack("<cBI", read_exact(ser, 6, "CPU baseline"))
     ser.close()
-    return result_class
 
+    n = len(rows)
+    match_py = sum(r["fpga"] == r["python"] for r in rows)
+    match_lbl = sum(r["fpga"] == r["label"] for r in rows)
+    acc_cyc = np.mean([r["acc_cycles"] for r in rows])
+    uart_cyc = np.mean([r["uart_cycles"] for r in rows])
+    host_ms = np.mean([r["host_ms"] for r in rows])
 
-def make_dummy_image():
-    return bytes([128] * (IMAGE_W * IMAGE_H))
+    print("\n================ summary ================")
+    print(f"FPGA matches Python integer model : {match_py}/{n}  (must be {n}/{n})")
+    print(f"FPGA accuracy vs MNIST labels     : {match_lbl}/{n} = {100.0 * match_lbl / n:.1f}%")
+    print(f"Accelerator time per image        : {acc_cyc:.0f} cycles = {acc_cyc / CLK_HZ * 1e6:.1f} us")
+    print(f"CPU-only software inference       : {cpu_cyc} cycles = {cpu_cyc / CLK_HZ * 1e3:.2f} ms "
+          f"(digit {cpu_digit}, FPGA said {rows[-1]['fpga']})")
+    print(f"Speedup (CPU cycles / accel cycles): {cpu_cyc / acc_cyc:.0f}x")
+    print(f"Image transfer over UART          : {uart_cyc:.0f} cycles = {uart_cyc / CLK_HZ * 1e3:.1f} ms "
+          f"at {args.baud} baud")
+    print(f"End-to-end per image (host clock) : {host_ms:.1f} ms")
 
-
-def make_edge_kernel():
-    kernel = [-1, -1, -1,
-              -1,  8, -1,
-              -1, -1, -1]
-    bias     = 0
-    shift_s  = 0
-    return kernel, bias, shift_s
-
-
-def generate_dummy_dense_weights():
-    """Generates random weights for the dense layer to simulate a trained model."""
-    weights = [int(random.uniform(-10, 10)) for _ in range(1690)]
-    biases = [int(random.uniform(-50, 50)) for _ in range(10)]
-    return weights, biases
+    out = os.path.join(HERE, "board_results.csv")
+    with open(out, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"\nPer-image results saved to {out}")
 
 
 if __name__ == "__main__":
-    image_bytes        = make_dummy_image()
-    kernel, bias, shift_s = make_edge_kernel()
-    dense_weights, dense_biases = generate_dummy_dense_weights()
-
-    print(f"Kernel: {kernel}  bias={bias}  shift_s={shift_s}")
-
-    print("\n--- Running Full Hardware CNN Accelerator ---")
-    predicted_digit = send_image(image_bytes, kernel, bias, shift_s, dense_weights, dense_biases, first_run=True)
-
-    print(f"\n>>> FPGA HARDWARE PREDICTED DIGIT: {predicted_digit} <<<")
-    print("Classification was completely performed in hardware!")
+    main()
