@@ -1,175 +1,108 @@
 """
-train.py — Train a CNN that exactly mirrors the FPGA hardware architecture.
+train.py - Train the FP32 CNN that mirrors the FPGA hardware.
 
-Architecture:
-    Input  : 28 x 28 x 1 greyscale
-    Conv2D : 1 -> 1 channel, 3x3 kernel, padding=1    => 28 x 28 x 1
-    ReLU
-    MaxPool: 2x2, stride 2                            => 14 x 14 x 1
-    Flatten                                           => 196
-    Linear : 196 -> 10
-    (Argmax at inference — no Softmax needed)
+Architecture (see fpga_model.py):
+    28x28 -> Conv3x3 (valid, 1 ch) -> ReLU -> MaxPool 2x2 -> 169 -> Linear -> 10
 
 Learnable parameters:
-    conv.weight  [1, 1, 3, 3]  =   9
-    conv.bias    [1]            =   1
-    fc.weight    [10, 196]      = 1960
-    fc.bias      [10]           =  10
-    ---------------------------------
-    Total                        1980
+    conv.weight [1,1,3,3] =    9
+    conv.bias   [1]       =    1
+    fc.weight   [10,169]  = 1690
+    fc.bias     [10]      =   10
+    ----------------------------
+    Total                   1710
+
+Run from the cnn_fpga folder:   python train.py
+Next step:                      python quantize.py
 """
 
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-import matplotlib.pyplot as plt
 import os
 
-DATA_DIR   = "./data"
-MODEL_PATH = "./models/fpga_cnn.pth"
-os.makedirs("./data",   exist_ok=True)
-os.makedirs("./models", exist_ok=True)
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 
+from fpga_model import FPGACNN, load_mnist
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(HERE, "models", "fpga_cnn.pth")
+os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+
+EPOCHS = 15
+SEED = 0
+
+torch.manual_seed(SEED)
+np.random.seed(SEED)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[INFO] Using device: {device}")
 
 
-class FPGACNN(nn.Module):
-    """
-    Direct software model of the FPGA CNN accelerator.
-
-    Pipeline mirrors the RTL:
-        slidingWindowAXI  — feeds 3x3 windows
-        datapath_top      — Conv + bias + scale + ReLU
-        max_pool_2d       — 2x2 max pool
-        dense_layer       — 169 -> 10 linear
-        argmax            — picks the highest score
-    """
-
-    def __init__(self):
-        super().__init__()
-
-        self.conv = nn.Conv2d(
-            in_channels=1,
-            out_channels=1,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            bias=True
-        )
-
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.fc = nn.Linear(196, 10, bias=True)
-
-    def forward(self, x):
-        x = self.conv(x)
-
-        x = torch.relu(x)
-
-        x = self.pool(x)
-
-        x = x.view(x.size(0), -1)
-
-        x = self.fc(x)
-
-        return x
+def to_tensor(images):
+    # Same scaling as the hardware sees: raw byte / 255. No mean/std normalisation,
+    # so the int8 model can use the raw 0..255 pixel directly.
+    return torch.from_numpy(images).float().unsqueeze(1) / 255.0
 
 
-transform = transforms.ToTensor()
+train_x, train_y = load_mnist("train")
+test_x, test_y = load_mnist("test")
+train_loader = DataLoader(TensorDataset(to_tensor(train_x), torch.from_numpy(train_y).long()),
+                          batch_size=64, shuffle=True)
+test_loader = DataLoader(TensorDataset(to_tensor(test_x), torch.from_numpy(test_y).long()),
+                         batch_size=1000, shuffle=False)
+print(f"[INFO] Train: {len(train_x)} images  |  Test: {len(test_x)} images")
 
-train_dataset = datasets.MNIST(
-    root=DATA_DIR, train=True,  download=True, transform=transform)
-test_dataset  = datasets.MNIST(
-    root=DATA_DIR, train=False, download=True, transform=transform)
-
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True,  num_workers=0)
-test_loader  = DataLoader(test_dataset,  batch_size=64, shuffle=False, num_workers=0)
-
-print(f"[INFO] Train: {len(train_dataset)} images  |  Test: {len(test_dataset)} images")
-
-
-model     = FPGACNN().to(device)
+model = FPGACNN().to(device)
 criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.3)
 
-total_params = sum(p.numel() for p in model.parameters())
-print(f"[INFO] Total learnable parameters: {total_params}")
-print(f"       conv.weight : {list(model.conv.weight.shape)}  = {model.conv.weight.numel()}")
-print(f"       conv.bias   : {list(model.conv.bias.shape)}   = {model.conv.bias.numel()}")
-print(f"       fc.weight   : {list(model.fc.weight.shape)} = {model.fc.weight.numel()}")
-print(f"       fc.bias     : {list(model.fc.bias.shape)}  = {model.fc.bias.numel()}")
+print(f"[INFO] Total learnable parameters: {sum(p.numel() for p in model.parameters())}")
 
-
-EPOCHS = 10
-train_losses     = []
-test_accuracies  = []
-
-print("\n[INFO] Starting training...")
-print(f"{'Epoch':>6} | {'Avg Loss':>10} | {'Test Acc (%)':>12}")
+train_losses, test_accuracies = [], []
+print(f"\n{'Epoch':>6} | {'Avg Loss':>10} | {'Test Acc (%)':>12}")
 print("-" * 35)
 
 for epoch in range(1, EPOCHS + 1):
-
     model.train()
-    running_loss = 0.0
-
+    running = 0.0
     for images, labels in train_loader:
         images, labels = images.to(device), labels.to(device)
-
         optimizer.zero_grad()
-        outputs = model(images)
-        loss    = criterion(outputs, labels)
+        loss = criterion(model(images), labels)
         loss.backward()
         optimizer.step()
-
-        running_loss += loss.item()
-
-    avg_loss = running_loss / len(train_loader)
-    train_losses.append(avg_loss)
+        running += loss.item()
+    scheduler.step()
 
     model.eval()
     correct = 0
-    total   = 0
-
     with torch.no_grad():
         for images, labels in test_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs     = model(images)
-            predictions = outputs.argmax(dim=1)
-            correct += (predictions == labels).sum().item()
-            total   += labels.size(0)
-
-    accuracy = 100.0 * correct / total
-    test_accuracies.append(accuracy)
-
-    print(f"{epoch:>6} | {avg_loss:>10.4f} | {accuracy:>11.2f}%")
-
+            pred = model(images.to(device)).argmax(dim=1)
+            correct += (pred == labels.to(device)).sum().item()
+    acc = 100.0 * correct / len(test_x)
+    train_losses.append(running / len(train_loader))
+    test_accuracies.append(acc)
+    print(f"{epoch:>6} | {train_losses[-1]:>10.4f} | {acc:>11.2f}%")
 
 torch.save(model.state_dict(), MODEL_PATH)
 print(f"\n[INFO] Model saved -> {MODEL_PATH}")
+print(f"[INFO] Final FP32 test accuracy: {test_accuracies[-1]:.2f}%")
 
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+    ax1.plot(range(1, EPOCHS + 1), train_losses, marker="o")
+    ax1.set_title("Training loss"); ax1.set_xlabel("Epoch"); ax1.grid(True)
+    ax2.plot(range(1, EPOCHS + 1), test_accuracies, marker="o")
+    ax2.set_title("Test accuracy (%)"); ax2.set_xlabel("Epoch"); ax2.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(HERE, "models", "training_curve.png"), dpi=120)
+    print("[INFO] Training curve saved -> models/training_curve.png")
+except ImportError:
+    pass
 
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-
-ax1.plot(range(1, EPOCHS + 1), train_losses, marker='o', color='steelblue')
-ax1.set_title("Training Loss")
-ax1.set_xlabel("Epoch")
-ax1.set_ylabel("Cross-Entropy Loss")
-ax1.grid(True)
-
-ax2.plot(range(1, EPOCHS + 1), test_accuracies, marker='o', color='darkorange')
-ax2.set_title("Test Accuracy")
-ax2.set_xlabel("Epoch")
-ax2.set_ylabel("Accuracy (%)")
-ax2.grid(True)
-
-plt.tight_layout()
-plt.savefig("./models/training_curve.png", dpi=120)
-print("[INFO] Training curve saved -> ./models/training_curve.png")
-plt.show()
-
-print("\n[INFO] Training complete.")
-print(f"[INFO] Final test accuracy: {test_accuracies[-1]:.2f}%")
-print("\n[NEXT STEP] Run extract_weights.py to pull out the FP32 parameters.")
+print("\n[NEXT STEP] python quantize.py")
