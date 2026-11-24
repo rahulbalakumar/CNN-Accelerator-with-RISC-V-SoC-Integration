@@ -1,6 +1,4 @@
 Research/1982-kung-why-systolic-architecture.pdf
-*.qsf
-*.qpf
 *.flock
 *.db_info
 *.tdf
@@ -16,4 +14,32 @@ Research/1982-kung-why-systolic-architecture.pdf
 /incremental_db
 /db
 *.qws
-/local_test
+# ModelSim simulation library
+work/
+*.qdb
+*.qpg
+*.qtl
+*.qdo
+LOCAL_NOTES.md
+cnn_fpga/data/
+output_files/
+transcript
+tb/**/transcript
+*.o
+*.elf
+*.bin
+*.ipynb
+# Quartus project files ARE committed (cnn_soc_top.qpf/.qsf/.sdc); only build output is ignored
+# Simulation build output
+tb/system/obj_dir/
+*.vvp
+*.wlf
+__pycache__/
+sw/firmware.hex
+
+# Local scratch and build output
+Claude outputs/
+local_test/
+slidingWindowAXIBRAM.*
+**/db/
+**/incremental_db/

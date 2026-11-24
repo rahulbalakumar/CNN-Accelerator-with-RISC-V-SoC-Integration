@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.sv": "systemverilog",
+        "*.v": "verilog",
+        "*.vh": "verilog"
+    }
+}

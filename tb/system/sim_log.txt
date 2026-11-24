@@ -1,0 +1,16 @@
+weights loaded (1722 bytes)
+image 0: label 0  python 0  fpga 0  | accelerator 830 cycles, image over UART 235285 cycles       OK
+image 1: label 1  python 1  fpga 1  | accelerator 830 cycles, image over UART 235285 cycles       OK
+image 2: label 2  python 2  fpga 2  | accelerator 830 cycles, image over UART 235285 cycles       OK
+image 3: label 3  python 3  fpga 3  | accelerator 830 cycles, image over UART 235285 cycles       OK
+image 4: label 4  python 4  fpga 4  | accelerator 830 cycles, image over UART 235285 cycles       OK
+image 5: label 5  python 6  fpga 6  | accelerator 830 cycles, image over UART 235285 cycles       OK
+image 6: label 6  python 6  fpga 6  | accelerator 830 cycles, image over UART 235285 cycles       OK
+image 7: label 7  python 7  fpga 7  | accelerator 830 cycles, image over UART 235285 cycles       OK
+image 8: label 8  python 8  fpga 8  | accelerator 830 cycles, image over UART 235285 cycles       OK
+image 9: label 9  python 9  fpga 9  | accelerator 830 cycles, image over UART 235285 cycles       OK
+CPU-only software inference of image 9: digit 9 in 3928305 cycles
+==============================================================
+ images: 10   logit checks: 100   matches MNIST label: 9/10
+ PASS: FPGA matches the Python integer model bit for bit
+==============================================================

@@ -1,5 +1,5 @@
 `timescale 1 ns / 1 ps
-module soc_interconnect (
+module soc_bus_interconnect (
     input  logic        clk,
     input  logic        resetn,
     input  logic        mem_valid,

@@ -1,5 +1,8 @@
 `timescale 1 ns / 1 ps
-module soc_top (
+module cnn_soc_top #(
+    parameter CLK_FREQ  = 50000000,
+    parameter BAUD_RATE = 115200
+)(
     input  logic        CLOCK_50,
     input  logic [3:0]  KEY,
     input  logic        UART_RXD,
@@ -56,7 +59,7 @@ module soc_top (
         .mem_wstrb (mem_wstrb),
         .mem_rdata (mem_rdata)
     );
-    soc_interconnect u_interconnect (
+    soc_bus_interconnect u_interconnect (
         .clk            (clk),
         .resetn         (resetn),
         .mem_valid      (mem_valid),
@@ -86,20 +89,49 @@ module soc_top (
         .gpio_rdata     (gpio_rdata),
         .class_weight_valid(class_weight_valid)
     );
-    logic [31:0] ram_memory [0:16383];
-    initial $readmemh("firmware.hex", ram_memory);
+    logic [7:0] bank_rdata [3:0];
+
+    soc_ram_byte_lane #(.MIF_FILE("firmware_0.mif"), .HEX_FILE("firmware_0.hex")) bank0 (
+        .clk(clk),
+        .we(ram_valid && mem_wstrb[0]),
+        .addr(mem_addr[15:2]),
+        .wdata(mem_wdata[7:0]),
+        .rdata(bank_rdata[0])
+    );
+    soc_ram_byte_lane #(.MIF_FILE("firmware_1.mif"), .HEX_FILE("firmware_1.hex")) bank1 (
+        .clk(clk),
+        .we(ram_valid && mem_wstrb[1]),
+        .addr(mem_addr[15:2]),
+        .wdata(mem_wdata[15:8]),
+        .rdata(bank_rdata[1])
+    );
+    soc_ram_byte_lane #(.MIF_FILE("firmware_2.mif"), .HEX_FILE("firmware_2.hex")) bank2 (
+        .clk(clk),
+        .we(ram_valid && mem_wstrb[2]),
+        .addr(mem_addr[15:2]),
+        .wdata(mem_wdata[23:16]),
+        .rdata(bank_rdata[2])
+    );
+    soc_ram_byte_lane #(.MIF_FILE("firmware_3.mif"), .HEX_FILE("firmware_3.hex")) bank3 (
+        .clk(clk),
+        .we(ram_valid && mem_wstrb[3]),
+        .addr(mem_addr[15:2]),
+        .wdata(mem_wdata[31:24]),
+        .rdata(bank_rdata[3])
+    );
+
+    assign ram_rdata = {bank_rdata[3], bank_rdata[2], bank_rdata[1], bank_rdata[0]};
+
     always_ff @(posedge clk) begin
         ram_ready <= 1'b0;
         if (ram_valid && !ram_ready) begin
             ram_ready <= 1'b1;
-            if (mem_wstrb[0]) ram_memory[mem_addr[15:2]][ 7: 0] <= mem_wdata[ 7: 0];
-            if (mem_wstrb[1]) ram_memory[mem_addr[15:2]][15: 8] <= mem_wdata[15: 8];
-            if (mem_wstrb[2]) ram_memory[mem_addr[15:2]][23:16] <= mem_wdata[23:16];
-            if (mem_wstrb[3]) ram_memory[mem_addr[15:2]][31:24] <= mem_wdata[31:24];
-            ram_rdata <= ram_memory[mem_addr[15:2]];
         end
     end
-    uart_peripheral uart (
+    uart_serial_controller #(
+        .CLK_FREQ  (CLK_FREQ),
+        .BAUD_RATE (BAUD_RATE)
+    ) uart (
         .clk     (clk),
         .resetn  (resetn),
         .valid   (uart_valid),
@@ -111,7 +143,7 @@ module soc_top (
         .uart_rx (uart_rx),
         .uart_tx (uart_tx)
     );
-    gpio_peripheral gpio (
+    display_gpio_peripheral gpio (
         .clk      (clk),
         .resetn   (resetn),
         .valid    (gpio_valid),
@@ -122,51 +154,97 @@ module soc_top (
         .ready    (gpio_ready),
         .gpio_out (gpio_out)
     );
+    logic [11:0] bram_addr;
+    logic [ 7:0] bram_rdata;
+    logic [31:0] img_base;
+    logic [31:0] img_len;
+    logic        re_start;
+    logic        re_done;
+    logic        re_busy;
+
+    image_bram_dp #(
+        .DEPTH_WORDS(1024)
+    ) img_bram (
+        .clk(clk),
+        .a_we(img_bram_valid && (|mem_wstrb)),
+        .a_waddr(mem_addr[11:2]),
+        .a_wdata(mem_wdata),
+        .a_wstrb(mem_wstrb),
+        .b_raddr(bram_addr),
+        .b_rdata(bram_rdata)
+    );
+    assign img_bram_rdata = 32'h0;
+
+    logic pixel_axis_tuser;
     logic [7:0] pixel_axis_tdata;
     logic       pixel_axis_tvalid;
     logic       pixel_axis_tready;
+
+    image_reader #(
+        .ADDR_W(12)
+    ) re (
+        .clk(clk),
+        .rstn(resetn),
+        .start(re_start),
+        .img_base(img_base[11:0]),
+        .img_len(img_len[11:0]),
+        .busy(re_busy),
+        .mem_raddr(bram_addr),
+        .mem_rdata(bram_rdata),
+        .m_axis_tdata(pixel_axis_tdata),
+        .m_axis_tvalid(pixel_axis_tvalid),
+        .m_axis_tuser(pixel_axis_tuser),
+        .m_axis_tready(pixel_axis_tready)
+    );
+
     logic [7:0] window_data [0:2][0:2];
     logic       window_valid;
     logic       window_ready;
-    assign pixel_axis_tdata  = mem_wdata[7:0];
-    assign pixel_axis_tvalid = img_bram_valid & (|mem_wstrb);
-    slidingWindowAXI #(
+
+    slidingWindowAXIBRAM #(
         .DATA_WIDTH(8),
-        .ROW_LENGTH(28)
+        .ROW_LENGTH(28),
+        .PADDING(0)
     ) window_gen (
         .clk           (clk),
         .rstn          (resetn),
         .s_axis_tdata  (pixel_axis_tdata),
         .s_axis_tvalid (pixel_axis_tvalid),
+        .s_axis_tuser  (pixel_axis_tuser),
         .s_axis_tready (pixel_axis_tready),
         .m_axis_tdata  (window_data),
         .m_axis_tvalid (window_valid),
-        .m_axis_tready (window_ready)
+        .m_axis_tready (1'b1)
     );
     logic [71:0] dp_weights;
     logic [15:0] dp_bias;
     logic [ 4:0] dp_shift_s;
-    logic        dp_enable;
-    logic signed [7:0] dp_relu_out;
-    logic              dp_valid_out;
+    wire         dp_enable = 1'b1;
     logic        result_ready;
     logic [31:0] result_latch;
     always_ff @(posedge clk or negedge resetn) begin
         if (!resetn) begin
-            dp_enable   <= 1'b0;
+            re_start    <= 1'b0;
+            img_base    <= '0;
+            img_len     <= '0;
             dp_weights  <= '0;
             dp_bias     <= '0;
             dp_shift_s  <= '0;
-        end else if (mac_ctrl_valid && mem_wstrb != 4'b0000) begin
-            case (mem_addr[7:0])
-                8'h00: dp_enable          <= mem_wdata[0];
-                8'h04: dp_weights[31:0]   <= mem_wdata;
-                8'h08: dp_weights[63:32]  <= mem_wdata;
-                8'h0C: dp_weights[71:64]  <= mem_wdata[7:0];
-                8'h10: dp_bias            <= mem_wdata[15:0];
-                8'h14: dp_shift_s         <= mem_wdata[4:0];
-                default: ;
-            endcase
+        end else begin
+            re_start <= 1'b0;
+            if (mac_ctrl_valid && mem_wstrb != 4'b0000) begin
+                case (mem_addr[7:0])
+                    8'h00: re_start           <= mem_wdata[0] && !re_busy;
+                    8'h04: dp_weights[31:0]   <= mem_wdata;
+                    8'h08: dp_weights[63:32]  <= mem_wdata;
+                    8'h0C: dp_weights[71:64]  <= mem_wdata[7:0];
+                    8'h10: dp_bias            <= mem_wdata[15:0];
+                    8'h14: dp_shift_s         <= mem_wdata[4:0];
+                    8'h18: img_base           <= mem_wdata;
+                    8'h1C: img_len            <= mem_wdata;
+                    default: ;
+                endcase
+            end
         end
     end
     logic [71:0] dp_pixels;
@@ -179,43 +257,30 @@ module soc_top (
         end
     endgenerate
 
-    assign window_ready = dp_enable; // No FIFO backpressure needed
-
-    datapath_top #(
-        .DATA_WIDTH  (8),
-        .PROD_WIDTH  (16),
-        .SHIFT_WIDTH (5),
-        .NUM_TAPS    (9)
-    ) dp (
-        .clk       (clk),
-        .rst_n     (resetn),
-        .valid_in  (window_valid & dp_enable),
-        .pixels    (dp_pixels),
-        .weights   (dp_weights),
-        .bias      ($signed(dp_bias)),
-        .shift_s   (dp_shift_s),
-        .relu_out  (dp_relu_out),
-        .valid_out (dp_valid_out)
-    );
+    assign window_ready = dp_enable;
 
     logic class_valid;
     logic [3:0] class_id;
 
-    classifier_top clf (
-        .clk(clk),
-        .rst_n(resetn),
-        .weight_wr_en(class_weight_valid && (|mem_wstrb)),
-        .weight_addr(mem_addr),
-        .weight_wdata(mem_wdata),
-        .valid_in(dp_valid_out),
-        .data_in(dp_relu_out),
-        .valid_out(class_valid),
-        .class_id(class_id)
+    cnn_core nn_pipeline (
+        .clk          (clk),
+        .rst_n        (resetn),
+        .accel_start  (re_start),
+        .weights      (dp_weights),
+        .bias         (dp_bias),
+        .shift_s      (dp_shift_s),
+        .valid_in     (window_valid & dp_enable),
+        .pixels       (dp_pixels),
+        .weight_wr_en (class_weight_valid && (|mem_wstrb)),
+        .weight_addr  (mem_addr),
+        .weight_wdata (mem_wdata),
+        .class_valid  (class_valid),
+        .class_id     (class_id)
     );
 
     logic [31:0] final_class_reg;
     logic class_ready_flag;
-    
+
     assign result_ready = class_ready_flag;
 
     always_ff @(posedge clk or negedge resetn) begin
@@ -226,8 +291,8 @@ module soc_top (
             if (class_valid) begin
                 final_class_reg <= {28'h0, class_id};
                 class_ready_flag <= 1'b1;
-            end else if (out_bram_valid && !out_bram_ready && mem_wstrb == 4'b0000) begin
-                class_ready_flag <= 1'b0; // CPU reads result
+            end else if (re_start || (out_bram_valid && !out_bram_ready && mem_wstrb == 4'b0000)) begin
+                class_ready_flag <= 1'b0;
             end
         end
     end
@@ -235,18 +300,40 @@ module soc_top (
     always_ff @(posedge clk or negedge resetn) begin
         if (!resetn) begin
             img_bram_ready <= 1'b0;
-            img_bram_rdata <= 32'h0;
             out_bram_ready <= 1'b0;
             out_bram_rdata <= 32'h0;
             mac_ctrl_ready <= 1'b0;
             mac_ctrl_rdata <= 32'h0;
         end else begin
-            img_bram_ready <= img_bram_valid && (pixel_axis_tready || (mem_wstrb == 4'b0000));
-            img_bram_rdata <= 32'h0;
-            out_bram_ready <= out_bram_valid;
+            img_bram_ready <= 1'b0;
+            if (img_bram_valid && !img_bram_ready)
+                img_bram_ready <= 1'b1;
+
+            out_bram_ready <= 1'b0;
+            if (out_bram_valid && !out_bram_ready)
+                out_bram_ready <= 1'b1;
+
             out_bram_rdata <= final_class_reg;
-            mac_ctrl_ready <= mac_ctrl_valid;
-            mac_ctrl_rdata <= {30'h0, result_ready, dp_enable};
+
+            mac_ctrl_ready <= 1'b0;
+            if (mac_ctrl_valid && !mac_ctrl_ready)
+                mac_ctrl_ready <= 1'b1;
+
+            if (mac_ctrl_valid && !mac_ctrl_ready && mem_wstrb == 4'b0000) begin
+                case (mem_addr[7:0])
+                    8'h00: mac_ctrl_rdata <= {30'h0, result_ready, re_busy};
+                    8'h04: mac_ctrl_rdata <= dp_weights[31:0];
+                    8'h08: mac_ctrl_rdata <= dp_weights[63:32];
+                    8'h0C: mac_ctrl_rdata <= {24'h0, dp_weights[71:64]};
+                    8'h10: mac_ctrl_rdata <= {16'h0, dp_bias};
+                    8'h14: mac_ctrl_rdata <= {27'h0, dp_shift_s};
+                    8'h18: mac_ctrl_rdata <= img_base;
+                    8'h1C: mac_ctrl_rdata <= img_len;
+                    default: mac_ctrl_rdata <= 32'h0;
+                endcase
+            end else begin
+                mac_ctrl_rdata <= 32'h0;
+            end
         end
     end
     function [6:0] hex_decode;
@@ -265,7 +352,7 @@ module soc_top (
             4'ha: hex_decode = 7'b0001000;
             4'hb: hex_decode = 7'b0000011;
             4'hc: hex_decode = 7'b1000110;
-            4'hd: hex_decode = 7'b0100001;
+            4'hd: hex_decode = 7'b0100010;
             4'he: hex_decode = 7'b0000110;
             4'hf: hex_decode = 7'b0001110;
             default: hex_decode = 7'b1111111;
@@ -280,3 +367,32 @@ module soc_top (
     assign HEX6 = hex_decode(gpio_out[27:24]);
     assign HEX7 = hex_decode(gpio_out[31:28]);
 endmodule
+ 
+module soc_ram_byte_lane #(
+    parameter string MIF_FILE = "",
+    parameter string HEX_FILE = ""
+)(
+    input  logic        clk,
+    input  logic        we,
+    input  logic [13:0] addr,
+    input  logic [ 7:0] wdata,
+    output logic [ 7:0] rdata
+);
+    (* ram_init_file = MIF_FILE, ramstyle = "no_rw_check, M9K" *) logic [7:0] mem [0:16383];
+
+// synthesis translate_off
+    initial begin
+        if (HEX_FILE != "") begin
+            $readmemh(HEX_FILE, mem);
+        end
+    end
+// synthesis translate_on
+
+    always_ff @(posedge clk) begin
+        if (we) begin
+            mem[addr] <= wdata;
+        end
+        rdata <= mem[addr];
+    end
+endmodule
+

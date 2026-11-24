@@ -35,11 +35,13 @@ Laptop --UART--> PicoRV32 --bus--> Sliding window (3x3) --> Conv datapath --> Ma
 ## Repository layout
 
 ```
-rtl/            SoC top, interconnect, peripherals, sliding window, classifier
-rtl/datapath/   MAC array, adder tree, quantize/saturate, ReLU
-tb/             Testbenches
+rtl/soc_integration_jaindu/      SoC top, PicoRV32, interconnect, UART, GPIO
+rtl/dataflow_memory_rahul/       Image BRAM, image reader, line buffers, sliding window
+rtl/datapath_arithmetic_rakesh/  MACs, adder tree, quantise/saturate, ReLU, pool, dense, argmax
+tb/             Block testbenches
 sw/             Firmware (start.S, main.c, linker script, Makefile) and host script
-cnn_fpga/       Training and weight extraction (PyTorch)
+cnn_fpga/       Training, quantisation and bit-exact integer model (PyTorch)
+tb/system/      Full-SoC test with real MNIST digits
 ```
 
 ## Team
@@ -47,60 +49,60 @@ cnn_fpga/       Training and weight extraction (PyTorch)
 | Member | Area |
 |---|---|
 | 1 | Datapath and arithmetic: MAC, adder tree, quantization, ReLU, pooling |
-| 2 | Dataflow and memory: line buffers, 3×3 sliding window, padding ([details](rtl/README_member2.md)) |
+| 2 | Dataflow and memory: line buffers, 3×3 sliding window, padding |
 | 3 | SoC integration: CPU, interconnect, peripherals, firmware, timing |
 
 ## Status
 
 ### Done
-- **Sliding window** (`slidingWindowAXIBRAM`)
-  - BRAM line buffers, confirmed to map to M9K in Quartus.
-  - AXI-Stream handshake: one window per input pixel, safe under backpressure.
-  - Valid and padded convolution modes (`PADDING` parameter).
-  - Start-of-frame restart (`s_axis_tuser`).
-  - Standard left-to-right window order.
-  - Verified by directed and constrained-random stall testbenches in both modes.
-- **Conv datapath:** 9 parallel MACs, pipelined adder tree, shift/saturate and ReLU (7-cycle latency).
-- **Classifier:** max pool, dense layer with CPU-loadable weights, and argmax.
-- **SoC:** PicoRV32, address decoder, UART, GPIO, and firmware for loading weights and streaming pixels.
-- **Model:** training and FP32 weight extraction.
+- **Dataflow and memory (Member 2):** shared dual-port image BRAM, image reader, BRAM line buffers and
+  3×3 sliding window (189.9 MHz standalone), each with its own testbench, plus an end-to-end image-path test.
+- **Datapath (Member 1):** 9 parallel unsigned-pixel × int8 MACs, pipelined adder tree, shift/saturate, ReLU,
+  2×2 max pool, dense 169→10 with CPU-loadable weights, argmax.
+- **SoC (Member 3):** PicoRV32, address decoder, UART, GPIO, firmware, full Quartus fit.
+- **Model:** hardware-matched training (`padding=0`, 169 inputs) and int8 quantisation with a bit-exact
+  integer model (`cnn_fpga/quantize.py`). Test accuracy: FP32 92.42 %, int8 92.40 %.
+- **Full-SoC simulation with real weights and real MNIST digits** (`tb/system/tb_soc_mnist.sv`):
+  all 100 logits and 10 digits match the Python integer model bit for bit.
+  Accelerator: 830 cycles per image. The same network in software on the PicoRV32 takes 3,928,305 cycles.
 
 ### To do
 
 | Owner | Item |
 |---|---|
-| 3 | Fix the `firmware.hex` format: one 32-bit word per line, not one byte (currently the CPU cannot boot) |
-| 3 | Fix the UART receiver bit count (`rx_bit_cnt` 9 → 10) |
-| 3 | Instantiate `slidingWindowAXIBRAM` (`ROW_LENGTH=28`, `PADDING=0`) and connect `s_axis_tuser` |
-| 3 | Make the pixel-stream `tvalid` a single-cycle pulse per store |
-| 3 | Firmware: mark the first pixel of each image (start of frame), and send 2 drain pixels after the image |
-| 3 | Add SDC constraints (50 MHz); run a full compile and timing analysis |
-| 1 | Treat pixels as unsigned in `mac_unit` (unsigned pixel × signed weight) |
-| 1 | Write `quantize.py` (int8 weights, bias and shift) with a bit-exact integer reference model |
-| 2 | Size `pixel_count` to its real range; check the divider timing at 50 MHz |
-| All | End-to-end SoC simulation with a real MNIST digit, compared against the integer reference model |
-| All | Power analysis report |
+| 3 | Commit the Quartus project (`.qpf`/`.qsf`), add `cnn_soc_top.sdc`, report Fmax and setup slack |
+| All | Board run with `sw/send_image.py`: record hit rate, cycle counts and UART time |
+| 3 | Power estimate (PowerPlay) |
+| All | Report, demo, viva |
 
 ## Build and run
 
-**Train and export the model**
+**1. Train, quantise and export test vectors** (Python 3, `torch`, `numpy`)
 ```
 cd cnn_fpga
-python train.py
-python extract_weights.py
+python train.py           # FP32 model -> models/fpga_cnn.pth
+python quantize.py        # int8 model, accuracy, weights/quant_params.json, tb/system/vectors/*.hex
 ```
 
-**Build the firmware** (needs `riscv32-unknown-elf-gcc`)
+**2. Build the firmware** (RV32I GCC; copies `firmware_k.mif` to the repo root and `.hex` to `tb/system`)
 ```
-cd sw && make
-```
-
-**Run on the FPGA:** compile in Quartus with `soc_top` as the top level, program the board, then:
-```
-python sw/send_image.py
+cd sw && make             # or: make CROSS=riscv64-unknown-elf-
 ```
 
-**Simulate the sliding window:** compile the files in `rtl/` and `tb/` (tested with Cadence Xcelium).
+**3. Full-SoC simulation** (real weights, 10 real digits, bit-exact check)
+```
+tb/system/run_verilator.sh                    # Verilator 5
+cd tb/system  then  do run_modelsim.do        # ModelSim / Questa
+```
+
+**4. Board:** compile `cnn_soc_top` in Quartus (with `cnn_soc_top.sdc`), program the DE2-115, then
+```
+pip install pyserial
+python sw/send_image.py --port COM3 --count 20
+```
+
+UART protocol: `'W'` + 1722 weight bytes → `'K'`; `'S'` + 784 pixels → `'R'`, digit, accelerator cycles,
+UART cycles; `'B'` → CPU-only software inference of the last image with its cycle count.
 
 ## Known limitations
 

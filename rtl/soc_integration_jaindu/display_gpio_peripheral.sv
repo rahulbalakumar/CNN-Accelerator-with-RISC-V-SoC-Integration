@@ -1,6 +1,6 @@
 `timescale 1 ns / 1 ps
 
-module gpio_peripheral (
+module display_gpio_peripheral (
     input  logic        clk,
     input  logic        resetn,
 
