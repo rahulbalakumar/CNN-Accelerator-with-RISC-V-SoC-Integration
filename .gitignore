@@ -36,3 +36,10 @@ tb/system/obj_dir/
 *.wlf
 __pycache__/
 sw/firmware.hex
+
+# Local scratch and build output
+Claude outputs/
+local_test/
+slidingWindowAXIBRAM.*
+**/db/
+**/incremental_db/
